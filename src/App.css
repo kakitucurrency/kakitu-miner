@@ -442,6 +442,16 @@ html, body, #root {
   white-space: nowrap;
 }
 
+.worklog-hash-link {
+  cursor: pointer;
+  color: #a78bfa;
+  text-decoration: underline dotted;
+}
+
+.worklog-hash-link:hover {
+  color: #c4b5fd;
+}
+
 .worklog-status {
   flex-shrink: 0;
   text-align: right;

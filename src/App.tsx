@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import "./App.css";
 
 interface SessionStats {
@@ -334,7 +335,13 @@ function App() {
                 {workHistory.map((entry, i) => (
                   <div key={i} className={`worklog-row ${entry.paid ? "paid" : ""}`}>
                     <span className="worklog-time">{entry.time}</span>
-                    <span className="worklog-hash">{entry.hash.slice(0, 8)}…</span>
+                    <span
+                      className="worklog-hash worklog-hash-link"
+                      title={entry.hash}
+                      onClick={() => openUrl(`https://explorer.kakitu.org/block/${entry.hash}`)}
+                    >
+                      {entry.hash.slice(0, 8)}…
+                    </span>
                     <span className="worklog-status">
                       {entry.paid ? "✓ paid" : "pending"}
                     </span>
