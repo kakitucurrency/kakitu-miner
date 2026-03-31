@@ -1,0 +1,25 @@
+[package]
+name = "kakitu-miner"
+version = "0.1.0"
+description = "Kakitu Miner — desktop PoW worker for KSHS micropayments"
+authors = ["Kakitu Currency"]
+edition = "2021"
+
+[lib]
+name = "kakitu_miner_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
+futures-util = "0.3"
+blake2b_simd = "1"
+hex = "0.4"
+rand = "0.8"
+tokio = { version = "1", features = ["full"] }

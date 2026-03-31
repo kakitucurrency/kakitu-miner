@@ -1,0 +1,358 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg: #0a0a0a;
+  --surface: #141414;
+  --surface2: #1a1a1a;
+  --border: #2a2a2a;
+  --amber: #f0b429;
+  --amber-dim: #c48f1c;
+  --amber-glow: rgba(240, 180, 41, 0.15);
+  --text: #e8e8e8;
+  --text-secondary: #888;
+  --text-muted: #555;
+  --green: #34d399;
+  --red: #f87171;
+  font-family: 'SF Mono', 'Fira Code', 'Fira Mono', 'Roboto Mono', monospace;
+  font-size: 14px;
+  background-color: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.app {
+  width: 420px;
+  height: 700px;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Header */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.header-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.02em;
+}
+
+.header-title .pick {
+  font-size: 16px;
+}
+
+.header-title span {
+  color: var(--amber);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  transition: background 0.3s ease, box-shadow 0.3s ease;
+}
+
+.status-dot.connected {
+  background: var(--green);
+  box-shadow: 0 0 6px rgba(52, 211, 153, 0.6);
+}
+
+.status-dot.mining {
+  background: var(--amber);
+  box-shadow: 0 0 8px rgba(240, 180, 41, 0.8);
+  animation: pulse-dot 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { box-shadow: 0 0 4px rgba(240, 180, 41, 0.5); }
+  50% { box-shadow: 0 0 12px rgba(240, 180, 41, 1); }
+}
+
+/* Body */
+.body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.body::-webkit-scrollbar {
+  width: 4px;
+}
+
+.body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.body::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 2px;
+}
+
+/* Address input */
+.field-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 6px;
+}
+
+.address-input {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: var(--text);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.address-input:focus {
+  border-color: var(--amber);
+  box-shadow: 0 0 0 2px var(--amber-glow);
+}
+
+.address-input::placeholder {
+  color: var(--text-muted);
+}
+
+.address-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Connect button */
+.connect-btn {
+  width: 100%;
+  padding: 11px 20px;
+  border-radius: 6px;
+  border: none;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  letter-spacing: 0.03em;
+}
+
+.connect-btn.connect {
+  background: var(--amber);
+  color: #0a0a0a;
+}
+
+.connect-btn.connect:hover {
+  background: #f5c24a;
+  box-shadow: 0 0 16px var(--amber-glow);
+}
+
+.connect-btn.connect:active {
+  background: var(--amber-dim);
+}
+
+.connect-btn.disconnect {
+  background: transparent;
+  color: var(--red);
+  border: 1px solid var(--red);
+}
+
+.connect-btn.disconnect:hover {
+  background: rgba(248, 113, 113, 0.08);
+}
+
+.connect-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+/* Mining visual panel */
+.mining-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 110px;
+}
+
+.mining-panel.active {
+  border-color: rgba(240, 180, 41, 0.3);
+  box-shadow: inset 0 0 20px rgba(240, 180, 41, 0.04);
+}
+
+/* Hash animation */
+.hash-animation {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.hash-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--amber);
+  animation: bounce 1s ease-in-out infinite;
+}
+
+.hash-dot:nth-child(1) { animation-delay: 0s; }
+.hash-dot:nth-child(2) { animation-delay: 0.15s; }
+.hash-dot:nth-child(3) { animation-delay: 0.3s; }
+.hash-dot:nth-child(4) { animation-delay: 0.45s; }
+.hash-dot:nth-child(5) { animation-delay: 0.6s; }
+
+@keyframes bounce {
+  0%, 60%, 100% {
+    transform: translateY(0);
+    opacity: 0.3;
+  }
+  30% {
+    transform: translateY(-8px);
+    opacity: 1;
+    box-shadow: 0 0 8px rgba(240, 180, 41, 0.8);
+  }
+}
+
+/* Idle icon */
+.idle-icon {
+  font-size: 28px;
+  opacity: 0.2;
+}
+
+.connected-icon {
+  font-size: 28px;
+  opacity: 0.5;
+}
+
+.mining-status-text {
+  font-size: 12px;
+  color: var(--text-secondary);
+  letter-spacing: 0.05em;
+}
+
+.mining-status-text.active {
+  color: var(--amber);
+}
+
+/* Hash scroll display */
+.hash-scroll {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: monospace;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Stats sections */
+.stats-section {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.stats-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.stats-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 7px 0;
+  border-bottom: 1px solid rgba(42, 42, 42, 0.5);
+}
+
+.stat-row:last-child {
+  border-bottom: none;
+}
+
+.stat-label {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.stat-value {
+  color: var(--text);
+  font-size: 12px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
+.stat-value.amber {
+  color: var(--amber);
+}
+
+.stat-value.green {
+  color: var(--green);
+}
+
+.stat-value.mining {
+  color: var(--amber);
+  animation: text-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes text-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* Connection status message */
+.connection-message {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 4px 0;
+}
+
+.connection-message.error {
+  color: var(--red);
+}
