@@ -338,7 +338,7 @@ function App() {
                     <span
                       className="worklog-hash worklog-hash-link"
                       title={entry.hash}
-                      onClick={() => openUrl(`https://explorer.kakitu.org/block/${entry.hash}`)}
+                      onClick={() => openUrl(`https://explorer.kakitu.org/hash/${entry.hash}`)}
                     >
                       {entry.hash.slice(0, 8)}…
                     </span>
