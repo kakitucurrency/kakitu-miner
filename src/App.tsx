@@ -72,8 +72,8 @@ function App() {
         const data = await res.json();
         setNetworkStats((prev) => ({
           connectedWorkers: data.connected_workers ?? prev.connectedWorkers,
-          totalPaid: data.total_paid ?? prev.totalPaid,
-          reward: data.reward_per_work ?? prev.reward,
+          totalPaid: parseFloat(data.total_kshs_paid ?? prev.totalPaid.toString()),
+          reward: parseFloat(data.work_reward_kshs ?? prev.reward.toString()),
         }));
       }
     } catch {

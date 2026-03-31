@@ -82,7 +82,7 @@ fn compute_work(hash_hex: &str, threshold: u64, cancel: Arc<AtomicBool>) -> Stri
         let result_bytes: [u8; 8] = result.as_bytes().try_into().unwrap();
         let result_u64 = u64::from_le_bytes(result_bytes);
         if result_u64 >= threshold {
-            return hex::encode(nonce.to_le_bytes());
+            return hex::encode(nonce.to_be_bytes());
         }
         nonce = nonce.wrapping_add(1);
         iters += 1;
