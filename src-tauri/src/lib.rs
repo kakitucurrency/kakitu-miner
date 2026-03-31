@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Mutex;
 use futures_util::{SinkExt, StreamExt};
@@ -19,6 +20,7 @@ type WsSender = Arc<Mutex<Option<futures_util::stream::SplitSink<
 
 struct WorkerState {
     sender: WsSender,
+    current_cancel: Arc<Mutex<Option<Arc<AtomicBool>>>>,
 }
 
 // ── Incoming WS message types ─────────────────────────────────────────────────
@@ -60,14 +62,18 @@ struct ConnectionStatusPayload {
 
 // ── PoW computation (CPU, blocking) ──────────────────────────────────────────
 
-fn compute_work(hash_hex: &str, threshold: u64) -> String {
+fn compute_work(hash_hex: &str, threshold: u64, cancel: Arc<AtomicBool>) -> String {
     let hash_bytes = match hex::decode(hash_hex) {
         Ok(b) => b,
         Err(_) => return String::new(),
     };
 
     let mut nonce: u64 = rand::random();
+    let mut iters: u64 = 0;
     loop {
+        if iters % 10_000 == 0 && cancel.load(Ordering::Relaxed) {
+            return String::new();
+        }
         let mut input = nonce.to_le_bytes().to_vec();
         input.extend_from_slice(&hash_bytes);
         let result = blake2b_simd::Params::new()
@@ -79,6 +85,7 @@ fn compute_work(hash_hex: &str, threshold: u64) -> String {
             return hex::encode(nonce.to_le_bytes());
         }
         nonce = nonce.wrapping_add(1);
+        iters += 1;
     }
 }
 
@@ -199,16 +206,29 @@ async fn handle_message(app: &AppHandle, sender_arc: &WsSender, text: &str) {
             // Emit work_started
             let _ = app.emit("work_started", WorkStartedPayload { hash: hash.clone() });
 
+            // Create a new cancel flag for this job, replacing any previous one
+            let cancel_flag = Arc::new(AtomicBool::new(false));
+            {
+                let state = app.state::<WorkerState>();
+                let mut guard = state.current_cancel.lock().await;
+                // Cancel any previous job
+                if let Some(prev) = guard.as_ref() {
+                    prev.store(true, Ordering::Relaxed);
+                }
+                *guard = Some(cancel_flag.clone());
+            }
+
             // Compute PoW in a blocking thread
             let hash_for_compute = hash.clone();
+            let cancel_for_compute = cancel_flag.clone();
             let work = tauri::async_runtime::spawn_blocking(move || {
-                compute_work(&hash_for_compute, threshold)
+                compute_work(&hash_for_compute, threshold, cancel_for_compute)
             })
             .await
             .unwrap_or_default();
 
             if work.is_empty() {
-                return;
+                return; // cancelled or bad hash
             }
 
             // Emit work_completed
@@ -220,9 +240,8 @@ async fn handle_message(app: &AppHandle, sender_arc: &WsSender, text: &str) {
                 },
             );
 
-            // Send result back over WebSocket
+            // Send result back over WebSocket — spec format: {"hash": "...", "work": "..."}
             let result_msg = serde_json::json!({
-                "action": "work_result",
                 "hash": hash,
                 "work": work,
             })
@@ -231,6 +250,14 @@ async fn handle_message(app: &AppHandle, sender_arc: &WsSender, text: &str) {
             let mut guard = sender_arc.lock().await;
             if let Some(sender) = guard.as_mut() {
                 let _ = sender.send(Message::Text(result_msg.into())).await;
+            }
+        }
+
+        "cancel" => {
+            let state = app.state::<WorkerState>();
+            let guard = state.current_cancel.lock().await;
+            if let Some(flag) = guard.as_ref() {
+                flag.store(true, Ordering::Relaxed);
             }
         }
 
@@ -260,6 +287,7 @@ async fn handle_message(app: &AppHandle, sender_arc: &WsSender, text: &str) {
 pub fn run() {
     let worker_state = WorkerState {
         sender: Arc::new(Mutex::new(None)),
+        current_cancel: Arc::new(Mutex::new(None)),
     };
 
     tauri::Builder::default()

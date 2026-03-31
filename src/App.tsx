@@ -34,6 +34,15 @@ interface ConnectionStatusPayload {
   message: string;
 }
 
+interface WorkHistoryEntry {
+  hash: string;
+  work: string;
+  time: string;
+  paid: boolean;
+}
+
+type TabId = "session" | "worklog";
+
 function App() {
   const [address, setAddress] = useState("");
   const [isConnected, setIsConnected] = useState(false);
@@ -41,6 +50,8 @@ function App() {
   const [isConnecting, setIsConnecting] = useState(false);
   const [currentHash, setCurrentHash] = useState<string | null>(null);
   const [connectionMessage, setConnectionMessage] = useState("");
+  const [activeTab, setActiveTab] = useState<TabId>("session");
+  const [workHistory, setWorkHistory] = useState<WorkHistoryEntry[]>([]);
   const [sessionStats, setSessionStats] = useState<SessionStats>({
     workCompleted: 0,
     kshsEarned: 0,
@@ -84,6 +95,16 @@ function App() {
           ...prev,
           workCompleted: prev.workCompleted + 1,
         }));
+
+        // Push to work history (newest first, max 50)
+        const entry: WorkHistoryEntry = {
+          hash: event.payload.hash,
+          work: event.payload.work,
+          time: new Date().toLocaleTimeString(),
+          paid: false,
+        };
+        setWorkHistory((prev) => [entry, ...prev].slice(0, 50));
+
         // clear hash display after short delay
         setTimeout(() => setCurrentHash(null), 2000);
       });
@@ -94,6 +115,13 @@ function App() {
           ...prev,
           kshsEarned: prev.kshsEarned + amount,
         }));
+
+        // Mark the matching hash as paid in work history
+        setWorkHistory((prev) =>
+          prev.map((entry) =>
+            entry.hash === event.payload.hash ? { ...entry, paid: true } : entry
+          )
+        );
       });
 
       const unStatus = await listen<ConnectionStatusPayload>(
@@ -237,45 +265,85 @@ function App() {
           )}
         </div>
 
-        {/* Session stats */}
-        <div className="stats-section">
-          <div className="stats-divider">Session</div>
-          <div className="stat-row">
-            <span className="stat-label">Work completed</span>
-            <span className="stat-value">{sessionStats.workCompleted}</span>
-          </div>
-          <div className="stat-row">
-            <span className="stat-label">KSHS earned</span>
-            <span className="stat-value amber">
-              {sessionStats.kshsEarned.toFixed(6)}
-            </span>
-          </div>
-          <div className="stat-row">
-            <span className="stat-label">Status</span>
-            <span className={`stat-value ${isMining ? "mining" : isConnected ? "green" : ""}`}>
-              {isMining ? "Mining..." : isConnected ? "Connected" : "Idle"}
-            </span>
-          </div>
+        {/* Tab switcher */}
+        <div className="tab-bar">
+          <button
+            className={`tab-btn ${activeTab === "session" ? "active" : ""}`}
+            onClick={() => setActiveTab("session")}
+          >
+            Session
+          </button>
+          <button
+            className={`tab-btn ${activeTab === "worklog" ? "active" : ""}`}
+            onClick={() => setActiveTab("worklog")}
+          >
+            Work Log
+          </button>
         </div>
 
-        {/* Network stats */}
-        <div className="stats-section">
-          <div className="stats-divider">Network</div>
-          <div className="stat-row">
-            <span className="stat-label">Connected workers</span>
-            <span className="stat-value">{networkStats.connectedWorkers}</span>
+        {/* Session tab */}
+        {activeTab === "session" && (
+          <>
+            <div className="stats-section">
+              <div className="stats-divider">Session</div>
+              <div className="stat-row">
+                <span className="stat-label">Work completed</span>
+                <span className="stat-value">{sessionStats.workCompleted}</span>
+              </div>
+              <div className="stat-row">
+                <span className="stat-label">KSHS earned</span>
+                <span className="stat-value amber">
+                  {sessionStats.kshsEarned.toFixed(6)}
+                </span>
+              </div>
+              <div className="stat-row">
+                <span className="stat-label">Status</span>
+                <span className={`stat-value ${isMining ? "mining" : isConnected ? "green" : ""}`}>
+                  {isMining ? "Mining..." : isConnected ? "Connected" : "Idle"}
+                </span>
+              </div>
+            </div>
+
+            <div className="stats-section">
+              <div className="stats-divider">Network</div>
+              <div className="stat-row">
+                <span className="stat-label">Connected workers</span>
+                <span className="stat-value">{networkStats.connectedWorkers}</span>
+              </div>
+              <div className="stat-row">
+                <span className="stat-label">Total KSHS paid</span>
+                <span className="stat-value">{networkStats.totalPaid.toFixed(6)}</span>
+              </div>
+              <div className="stat-row">
+                <span className="stat-label">Your reward</span>
+                <span className="stat-value amber">
+                  {networkStats.reward.toFixed(6)} KSHS
+                </span>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Work Log tab */}
+        {activeTab === "worklog" && (
+          <div className="worklog-section">
+            {workHistory.length === 0 ? (
+              <div className="worklog-empty">No work completed yet this session.</div>
+            ) : (
+              <div className="worklog-list">
+                {workHistory.map((entry, i) => (
+                  <div key={i} className={`worklog-row ${entry.paid ? "paid" : ""}`}>
+                    <span className="worklog-time">{entry.time}</span>
+                    <span className="worklog-hash">{entry.hash.slice(0, 8)}…</span>
+                    <span className="worklog-status">
+                      {entry.paid ? "✓ paid" : "pending"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
-          <div className="stat-row">
-            <span className="stat-label">Total KSHS paid</span>
-            <span className="stat-value">{networkStats.totalPaid.toFixed(6)}</span>
-          </div>
-          <div className="stat-row">
-            <span className="stat-label">Your reward</span>
-            <span className="stat-value amber">
-              {networkStats.reward.toFixed(6)} KSHS
-            </span>
-          </div>
-        </div>
+        )}
       </div>
     </div>
   );

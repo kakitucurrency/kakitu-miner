@@ -356,3 +356,94 @@ html, body, #root {
 .connection-message.error {
   color: var(--red);
 }
+
+/* Tab bar */
+.tab-bar {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  gap: 0;
+}
+
+.tab-btn {
+  flex: 1;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 8px 0;
+  color: var(--text-secondary);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s;
+  margin-bottom: -1px;
+}
+
+.tab-btn:hover {
+  color: var(--text);
+}
+
+.tab-btn.active {
+  color: var(--amber);
+  border-bottom-color: var(--amber);
+}
+
+/* Work Log */
+.worklog-section {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.worklog-empty {
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+  padding: 24px 0;
+}
+
+.worklog-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.worklog-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid rgba(42, 42, 42, 0.5);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.worklog-row:last-child {
+  border-bottom: none;
+}
+
+.worklog-row.paid .worklog-hash,
+.worklog-row.paid .worklog-status {
+  color: var(--amber);
+}
+
+.worklog-time {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  width: 68px;
+}
+
+.worklog-hash {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.worklog-status {
+  flex-shrink: 0;
+  text-align: right;
+  width: 56px;
+}
