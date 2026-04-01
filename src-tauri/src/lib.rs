@@ -7,12 +7,12 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
-// Kakitu default receive/open threshold (8x Nano base)
-const WORK_THRESHOLD: u64 = 0xffffffc000000000;
+// Kakitu default threshold (private network, ~64x lower than Nano mainnet)
+const WORK_THRESHOLD: u64 = 0xfffff00000000000;
 
 // Difficulty bounds — reject work outside this range
-const MIN_DIFFICULTY: u64 = 0xffffff0000000000;
-const MAX_DIFFICULTY: u64 = 0xfffffffe00000000;
+const MIN_DIFFICULTY: u64 = 0xffffe00000000000;
+const MAX_DIFFICULTY: u64 = 0xfffff80000000000;
 
 // PoW timeout — discard work that takes longer than this
 const WORK_TIMEOUT_SECS: u64 = 120;
