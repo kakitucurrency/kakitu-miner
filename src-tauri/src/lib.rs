@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Mutex;
 use futures_util::{SinkExt, StreamExt};
@@ -8,6 +9,20 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 // Kakitu default receive/open threshold (8x Nano base)
 const WORK_THRESHOLD: u64 = 0xffffffc000000000;
+
+// Difficulty bounds — reject work outside this range
+const MIN_DIFFICULTY: u64 = 0xffffff0000000000;
+const MAX_DIFFICULTY: u64 = 0xfffffffe00000000;
+
+// PoW timeout — discard work that takes longer than this
+const WORK_TIMEOUT_SECS: u64 = 120;
+
+// Reconnect limits
+const MAX_RECONNECT_RETRIES: u32 = 10;
+const MAX_BACKOFF_SECS: u64 = 60;
+
+// Ping/pong liveness — if no ping in this many seconds, consider connection dead
+const PING_TIMEOUT_SECS: u64 = 90;
 
 // ── Shared state ──────────────────────────────────────────────────────────────
 
@@ -21,6 +36,7 @@ type WsSender = Arc<Mutex<Option<futures_util::stream::SplitSink<
 struct WorkerState {
     sender: WsSender,
     current_cancel: Arc<Mutex<Option<Arc<AtomicBool>>>>,
+    current_work_hash: Arc<Mutex<Option<String>>>,
 }
 
 // ── Incoming WS message types ─────────────────────────────────────────────────
@@ -71,7 +87,7 @@ fn compute_work(hash_hex: &str, threshold: u64, cancel: Arc<AtomicBool>) -> Stri
     let mut nonce: u64 = rand::random();
     let mut iters: u64 = 0;
     loop {
-        if iters % 10_000 == 0 && cancel.load(Ordering::Relaxed) {
+        if iters % 10_000 == 0 && cancel.load(Ordering::Acquire) {
             return String::new();
         }
         let mut input = nonce.to_le_bytes().to_vec();
@@ -138,6 +154,7 @@ async fn connect_worker(
     // Clone what we need for the read loop
     let sender_clone = state.sender.clone();
     let cancel_clone = state.current_cancel.clone();
+    let work_hash_clone = state.current_work_hash.clone();
     let app_clone = app.clone();
     let address_clone = address.clone();
 
@@ -145,17 +162,66 @@ async fn connect_worker(
     tauri::async_runtime::spawn(async move {
         let mut read_stream = read;
         let mut backoff_secs: u64 = 1;
+        let mut consecutive_retries: u32 = 0;
+        let last_ping = Arc::new(Mutex::new(Instant::now()));
+
+        // Spawn a ping watchdog task that checks liveness
+        let ping_sender = sender_clone.clone();
+        let ping_cancel = cancel_clone.clone();
+        let ping_app = app_clone.clone();
+        let ping_last = last_ping.clone();
+        let ping_watchdog_active = Arc::new(AtomicBool::new(true));
+        let watchdog_flag = ping_watchdog_active.clone();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                if !watchdog_flag.load(Ordering::Acquire) {
+                    break;
+                }
+                let elapsed = {
+                    let guard = ping_last.lock().await;
+                    guard.elapsed().as_secs()
+                };
+                if elapsed >= PING_TIMEOUT_SECS {
+                    // No ping received in PING_TIMEOUT_SECS — consider dead
+                    {
+                        let guard = ping_cancel.lock().await;
+                        if let Some(flag) = guard.as_ref() {
+                            flag.store(true, Ordering::Release);
+                        }
+                    }
+                    {
+                        let mut guard = ping_sender.lock().await;
+                        if let Some(sender) = guard.as_mut() {
+                            let _ = sender.close().await;
+                        }
+                        *guard = None;
+                    }
+                    let _ = ping_app.emit(
+                        "connection_status",
+                        ConnectionStatusPayload {
+                            connected: false,
+                            message: "Connection stale (no ping). Reconnecting...".into(),
+                        },
+                    );
+                    break;
+                }
+            }
+        });
 
         loop {
             // Read messages until disconnect
-            let mut disconnected = false;
             while let Some(msg_result) = read_stream.next().await {
                 match msg_result {
                     Ok(Message::Text(text)) => {
-                        handle_message(&app_clone, &sender_clone, text.as_str()).await;
+                        // Any message resets last_ping as proof of liveness
+                        {
+                            let mut guard = last_ping.lock().await;
+                            *guard = Instant::now();
+                        }
+                        handle_message(&app_clone, &sender_clone, &work_hash_clone, text.as_str()).await;
                     }
                     Ok(Message::Close(_)) | Err(_) => {
-                        disconnected = true;
                         break;
                     }
                     _ => {}
@@ -166,27 +232,51 @@ async fn connect_worker(
             {
                 let guard = cancel_clone.lock().await;
                 if let Some(flag) = guard.as_ref() {
-                    flag.store(true, Ordering::Relaxed);
+                    flag.store(true, Ordering::Release);
                 }
             }
 
-            // Connection dropped — clear sender
+            // Connection dropped — clear sender and current work hash
             {
                 let mut guard = sender_clone.lock().await;
                 *guard = None;
+            }
+            {
+                let mut guard = work_hash_clone.lock().await;
+                *guard = None;
+            }
+
+            consecutive_retries += 1;
+
+            // Check max retries
+            if consecutive_retries > MAX_RECONNECT_RETRIES {
+                let _ = app_clone.emit(
+                    "connection_status",
+                    ConnectionStatusPayload {
+                        connected: false,
+                        message: format!(
+                            "Failed after {} consecutive retries. Stopped.",
+                            MAX_RECONNECT_RETRIES
+                        ),
+                    },
+                );
+                ping_watchdog_active.store(false, Ordering::Release);
+                break;
             }
 
             let _ = app_clone.emit(
                 "connection_status",
                 ConnectionStatusPayload {
                     connected: false,
-                    message: format!("Disconnected. Reconnecting in {backoff_secs}s..."),
+                    message: format!(
+                        "Disconnected. Reconnecting in {backoff_secs}s... (attempt {consecutive_retries}/{MAX_RECONNECT_RETRIES})"
+                    ),
                 },
             );
 
             // Wait before reconnect
             tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
-            backoff_secs = (backoff_secs * 2).min(30);
+            backoff_secs = (backoff_secs * 2).min(MAX_BACKOFF_SECS);
 
             // Attempt reconnect
             let reconnect_url = "wss://work.kakitu.org/worker/ws";
@@ -210,7 +300,13 @@ async fn connect_worker(
                         },
                     );
                     read_stream = read;
-                    backoff_secs = 1; // Reset backoff on success
+                    backoff_secs = 1;
+                    consecutive_retries = 0; // Reset on success
+                    // Reset ping timer on reconnect
+                    {
+                        let mut guard = last_ping.lock().await;
+                        *guard = Instant::now();
+                    }
                 }
                 Err(_) => {
                     continue; // Try again after next backoff
@@ -229,7 +325,7 @@ async fn disconnect_worker(app: AppHandle) -> Result<(), String> {
     {
         let guard = state.current_cancel.lock().await;
         if let Some(flag) = guard.as_ref() {
-            flag.store(true, Ordering::Relaxed);
+            flag.store(true, Ordering::Release);
         }
     }
     let mut guard = state.sender.lock().await;
@@ -242,7 +338,12 @@ async fn disconnect_worker(app: AppHandle) -> Result<(), String> {
 
 // ── Message handler ───────────────────────────────────────────────────────────
 
-async fn handle_message(app: &AppHandle, sender_arc: &WsSender, text: &str) {
+async fn handle_message(
+    app: &AppHandle,
+    sender_arc: &WsSender,
+    current_work_hash: &Arc<Mutex<Option<String>>>,
+    text: &str,
+) {
     let msg: WsIncoming = match serde_json::from_str(text) {
         Ok(m) => m,
         Err(_) => return,
@@ -262,6 +363,21 @@ async fn handle_message(app: &AppHandle, sender_arc: &WsSender, text: &str) {
                 .and_then(|d| u64::from_str_radix(d.trim_start_matches("0x"), 16).ok())
                 .unwrap_or(WORK_THRESHOLD);
 
+            // Fix 4: Validate difficulty bounds
+            if threshold < MIN_DIFFICULTY || threshold > MAX_DIFFICULTY {
+                eprintln!(
+                    "[kakitu-miner] Rejected work: difficulty {:#018x} out of bounds [{:#018x}, {:#018x}]",
+                    threshold, MIN_DIFFICULTY, MAX_DIFFICULTY
+                );
+                return;
+            }
+
+            // Fix 2: Record the current work hash so we can detect staleness
+            {
+                let mut guard = current_work_hash.lock().await;
+                *guard = Some(hash.clone());
+            }
+
             // Emit work_started
             let _ = app.emit("work_started", WorkStartedPayload { hash: hash.clone() });
 
@@ -270,12 +386,19 @@ async fn handle_message(app: &AppHandle, sender_arc: &WsSender, text: &str) {
             {
                 let state = app.state::<WorkerState>();
                 let mut guard = state.current_cancel.lock().await;
-                // Cancel any previous job
+                // Cancel any previous job (Fix 1: Release ordering)
                 if let Some(prev) = guard.as_ref() {
-                    prev.store(true, Ordering::Relaxed);
+                    prev.store(true, Ordering::Release);
                 }
                 *guard = Some(cancel_flag.clone());
             }
+
+            // Fix 2: Spawn a timeout watchdog that cancels work after WORK_TIMEOUT_SECS
+            let timeout_cancel = cancel_flag.clone();
+            let timeout_handle = tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(WORK_TIMEOUT_SECS)).await;
+                timeout_cancel.store(true, Ordering::Release);
+            });
 
             // Compute PoW in a blocking thread
             let hash_for_compute = hash.clone();
@@ -286,8 +409,30 @@ async fn handle_message(app: &AppHandle, sender_arc: &WsSender, text: &str) {
             .await
             .unwrap_or_default();
 
+            // Cancel the timeout watchdog if work finished in time
+            timeout_handle.abort();
+
             if work.is_empty() {
-                return; // cancelled or bad hash
+                // Cancelled, timed out, or bad hash
+                eprintln!("[kakitu-miner] Work cancelled or timed out for hash {}", hash);
+                return;
+            }
+
+            // Fix 2: Check that the hash still matches the current assignment (not stale)
+            {
+                let guard = current_work_hash.lock().await;
+                match guard.as_deref() {
+                    Some(current) if current == hash => {
+                        // Still current — proceed to submit
+                    }
+                    _ => {
+                        eprintln!(
+                            "[kakitu-miner] Discarding stale PoW for hash {} (no longer current)",
+                            hash
+                        );
+                        return;
+                    }
+                }
             }
 
             // Emit work_completed
@@ -299,7 +444,7 @@ async fn handle_message(app: &AppHandle, sender_arc: &WsSender, text: &str) {
                 },
             );
 
-            // Send result back over WebSocket — spec format: {"hash": "...", "work": "..."}
+            // Send result back over WebSocket
             let result_msg = serde_json::json!({
                 "hash": hash,
                 "work": work,
@@ -316,7 +461,7 @@ async fn handle_message(app: &AppHandle, sender_arc: &WsSender, text: &str) {
             let state = app.state::<WorkerState>();
             let guard = state.current_cancel.lock().await;
             if let Some(flag) = guard.as_ref() {
-                flag.store(true, Ordering::Relaxed);
+                flag.store(true, Ordering::Release);
             }
         }
 
@@ -347,6 +492,7 @@ pub fn run() {
     let worker_state = WorkerState {
         sender: Arc::new(Mutex::new(None)),
         current_cancel: Arc::new(Mutex::new(None)),
+        current_work_hash: Arc::new(Mutex::new(None)),
     };
 
     tauri::Builder::default()
