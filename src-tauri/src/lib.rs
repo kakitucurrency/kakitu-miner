@@ -6,8 +6,8 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
-// Nano/Kakitu send threshold
-const WORK_THRESHOLD: u64 = 0xfffffe0000000000;
+// Kakitu default receive/open threshold (8x Nano base)
+const WORK_THRESHOLD: u64 = 0xffffffc000000000;
 
 // ── Shared state ──────────────────────────────────────────────────────────────
 
@@ -137,34 +137,86 @@ async fn connect_worker(
 
     // Clone what we need for the read loop
     let sender_clone = state.sender.clone();
+    let cancel_clone = state.current_cancel.clone();
     let app_clone = app.clone();
+    let address_clone = address.clone();
 
-    // Spawn message-reading loop
+    // Spawn message-reading loop with auto-reconnect
     tauri::async_runtime::spawn(async move {
-        while let Some(msg_result) = read.next().await {
-            match msg_result {
-                Ok(Message::Text(text)) => {
-                    handle_message(&app_clone, &sender_clone, text.as_str()).await;
+        let mut read_stream = read;
+        let mut backoff_secs: u64 = 1;
+
+        loop {
+            // Read messages until disconnect
+            let mut disconnected = false;
+            while let Some(msg_result) = read_stream.next().await {
+                match msg_result {
+                    Ok(Message::Text(text)) => {
+                        handle_message(&app_clone, &sender_clone, text.as_str()).await;
+                    }
+                    Ok(Message::Close(_)) | Err(_) => {
+                        disconnected = true;
+                        break;
+                    }
+                    _ => {}
                 }
-                Ok(Message::Close(_)) | Err(_) => {
-                    break;
+            }
+
+            // Cancel any in-flight PoW
+            {
+                let guard = cancel_clone.lock().await;
+                if let Some(flag) = guard.as_ref() {
+                    flag.store(true, Ordering::Relaxed);
                 }
-                _ => {}
+            }
+
+            // Connection dropped — clear sender
+            {
+                let mut guard = sender_clone.lock().await;
+                *guard = None;
+            }
+
+            let _ = app_clone.emit(
+                "connection_status",
+                ConnectionStatusPayload {
+                    connected: false,
+                    message: format!("Disconnected. Reconnecting in {backoff_secs}s..."),
+                },
+            );
+
+            // Wait before reconnect
+            tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
+            backoff_secs = (backoff_secs * 2).min(30);
+
+            // Attempt reconnect
+            let reconnect_url = "wss://work.kakitu.org/worker/ws";
+            let ws_result = connect_async(reconnect_url).await;
+            match ws_result {
+                Ok((ws_stream, _)) => {
+                    let (mut write, read) = ws_stream.split();
+                    let reg = serde_json::json!({ "kshs_address": address_clone }).to_string();
+                    if write.send(Message::Text(reg.into())).await.is_err() {
+                        continue;
+                    }
+                    {
+                        let mut guard = sender_clone.lock().await;
+                        *guard = Some(write);
+                    }
+                    let _ = app_clone.emit(
+                        "connection_status",
+                        ConnectionStatusPayload {
+                            connected: true,
+                            message: "Reconnected to worker hub.".into(),
+                        },
+                    );
+                    read_stream = read;
+                    backoff_secs = 1; // Reset backoff on success
+                }
+                Err(_) => {
+                    continue; // Try again after next backoff
+                }
             }
         }
-
-        // Connection dropped
-        {
-            let mut guard = sender_clone.lock().await;
-            *guard = None;
-        }
-        let _ = app_clone.emit(
-            "connection_status",
-            ConnectionStatusPayload {
-                connected: false,
-                message: "Disconnected from worker hub.".into(),
-            },
-        );
     });
 
     Ok(())
@@ -173,6 +225,13 @@ async fn connect_worker(
 #[tauri::command]
 async fn disconnect_worker(app: AppHandle) -> Result<(), String> {
     let state = app.state::<WorkerState>();
+    // Cancel any in-flight PoW
+    {
+        let guard = state.current_cancel.lock().await;
+        if let Some(flag) = guard.as_ref() {
+            flag.store(true, Ordering::Relaxed);
+        }
+    }
     let mut guard = state.sender.lock().await;
     if let Some(mut sender) = guard.take() {
         let _ = sender.send(Message::Close(None)).await;
