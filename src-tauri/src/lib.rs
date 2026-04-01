@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Mutex;
@@ -84,24 +84,53 @@ fn compute_work(hash_hex: &str, threshold: u64, cancel: Arc<AtomicBool>) -> Stri
         Err(_) => return String::new(),
     };
 
-    let mut nonce: u64 = rand::random();
-    let mut iters: u64 = 0;
-    loop {
-        if iters % 10_000 == 0 && cancel.load(Ordering::Acquire) {
-            return String::new();
+    let num_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+
+    let found = Arc::new(AtomicBool::new(false));
+    let result_nonce = Arc::new(AtomicU64::new(0));
+    let base_nonce: u64 = rand::random();
+
+    std::thread::scope(|s| {
+        for thread_idx in 0..num_threads {
+            let hash_bytes = &hash_bytes;
+            let cancel = cancel.clone();
+            let found = found.clone();
+            let result_nonce = result_nonce.clone();
+
+            s.spawn(move || {
+                let mut nonce = base_nonce.wrapping_add(thread_idx as u64);
+                let mut iters: u64 = 0;
+                loop {
+                    if iters % 10_000 == 0 {
+                        if cancel.load(Ordering::Acquire) || found.load(Ordering::Acquire) {
+                            return;
+                        }
+                    }
+                    let mut input = nonce.to_le_bytes().to_vec();
+                    input.extend_from_slice(hash_bytes);
+                    let result = blake2b_simd::Params::new()
+                        .hash_length(8)
+                        .hash(&input);
+                    let result_bytes: [u8; 8] = result.as_bytes().try_into().unwrap();
+                    let result_u64 = u64::from_le_bytes(result_bytes);
+                    if result_u64 >= threshold {
+                        result_nonce.store(nonce, Ordering::Release);
+                        found.store(true, Ordering::Release);
+                        return;
+                    }
+                    nonce = nonce.wrapping_add(num_threads as u64);
+                    iters += 1;
+                }
+            });
         }
-        let mut input = nonce.to_le_bytes().to_vec();
-        input.extend_from_slice(&hash_bytes);
-        let result = blake2b_simd::Params::new()
-            .hash_length(8)
-            .hash(&input);
-        let result_bytes: [u8; 8] = result.as_bytes().try_into().unwrap();
-        let result_u64 = u64::from_le_bytes(result_bytes);
-        if result_u64 >= threshold {
-            return hex::encode(nonce.to_be_bytes());
-        }
-        nonce = nonce.wrapping_add(1);
-        iters += 1;
+    });
+
+    if found.load(Ordering::Acquire) {
+        hex::encode(result_nonce.load(Ordering::Acquire).to_be_bytes())
+    } else {
+        String::new()
     }
 }
 

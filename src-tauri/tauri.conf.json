@@ -19,7 +19,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; connect-src 'self' wss://work.kakitu.org https://work.kakitu.org; style-src 'self' 'unsafe-inline'"
     }
   },
   "bundle": {

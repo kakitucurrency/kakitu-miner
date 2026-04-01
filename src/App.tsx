@@ -40,6 +40,7 @@ interface WorkHistoryEntry {
   work: string;
   time: string;
   paid: boolean;
+  txHash?: string;
 }
 
 type TabId = "session" | "worklog";
@@ -117,10 +118,12 @@ function App() {
           kshsEarned: prev.kshsEarned + amount,
         }));
 
-        // Mark the matching hash as paid in work history
+        // Mark the matching hash as paid in work history and store the tx hash
         setWorkHistory((prev) =>
           prev.map((entry) =>
-            entry.hash === event.payload.hash ? { ...entry, paid: true } : entry
+            entry.hash === event.payload.hash
+              ? { ...entry, paid: true, txHash: event.payload.tx_hash || undefined }
+              : entry
           )
         );
       });
@@ -154,14 +157,19 @@ function App() {
   }, []);
 
   const handleConnect = async () => {
-    if (!address.trim()) {
+    const trimmed = address.trim();
+    if (!trimmed) {
       setConnectionMessage("Please enter your KSHS address.");
+      return;
+    }
+    if (!/^kshs_[13][a-z0-9]{59}$/.test(trimmed)) {
+      setConnectionMessage("Invalid KSHS address. Expected format: kshs_1... or kshs_3... (64 characters after prefix).");
       return;
     }
     setIsConnecting(true);
     setConnectionMessage("Connecting...");
     try {
-      await invoke("connect_worker", { address: address.trim() });
+      await invoke("connect_worker", { address: trimmed });
     } catch (err) {
       setConnectionMessage(`Error: ${err}`);
       setIsConnecting(false);
@@ -338,7 +346,7 @@ function App() {
                     <span
                       className="worklog-hash worklog-hash-link"
                       title={entry.hash}
-                      onClick={() => openUrl(`https://explorer.kakitu.org/hash/${entry.hash}`)}
+                      onClick={() => openUrl(`https://explorer.kakitu.org/hash/${entry.txHash || entry.hash}`)}
                     >
                       {entry.hash.slice(0, 8)}…
                     </span>
